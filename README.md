@@ -2,13 +2,11 @@
 
 ![Version](https://img.shields.io/badge/version-1.0-blue) ![Licence](https://img.shields.io/badge/license-All%20rights%20reserved-red) ![Last Modified](https://img.shields.io/badge/last%20modified-2021--05--06-yellow)
 
-
-
-## Description
-
-The "GASBAG" game is a classic MS-DOS game developed in QuickBASIC 4.5 (QB45). It provides an engaging balloon shooting experience where players control a shooter at the bottom of the screen, aiming to shoot falling balloons. The game progressively increases in difficulty, providing a challenging and entertaining gaming experience.
+The "GASBAG" game is a classic MS-DOS game developed in QuickBASIC 4.5 (QB45) by Branislav Juhás in early May 2021.
 
 ![README/Title.png](README/Title.png)
+
+It provides an engaging balloon shooting experience where players control a shooter at the bottom of the screen, aiming to shoot falling balloons. The game progressively increases in difficulty, providing a challenging and entertaining gaming experience.
 
 ## User Manual
 
