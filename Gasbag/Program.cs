@@ -1,6 +1,8 @@
-﻿using SadConsole.Configuration;
+﻿using System.Reflection;
+using SadConsole.Configuration;
 
-Settings.WindowTitle = "My SadConsole Game";
+Settings.WindowTitle = $"DN Gasbag {Assembly.GetExecutingAssembly().GetName().Version}";
+Settings.ResizeMode = Settings.WindowResizeOptions.Stretch;
 
 Builder
     .GetBuilder()
