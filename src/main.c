@@ -1,7 +1,7 @@
-#include <stdio.h>
-#include "util.h"
+#include "video.h"
 
 int main(void) {
-    printf("Result: %d\n", add(12, 3));
+    clear_screen(0b00011111); // Clear screen with white on blue
+
     return 0;
 }

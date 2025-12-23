@@ -4,7 +4,7 @@ TARGET = dos
 CC = wcl
 CFLAGS = -bt=$(TARGET)
 
-SRC = src/main.c src/util.c
+SRC = src/main.c src/video.c
 OUT = gasbag.exe
 
 all: $(OUT)
