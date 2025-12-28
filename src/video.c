@@ -32,17 +32,6 @@ void flip_buffer(void) {
     change_buffer_asm(g_current_buffer);
 }
 
-// void clear_screen(const unsigned char attribute) {
-//     unsigned short segment_to_clear = 0xB800 + (256 * !g_current_buffer);
-//     clear_page_asm(attribute, segment_to_clear);
-//
-//     flip_buffer();
-//
-//     segment_to_clear = 0xB800 + (256 * !g_current_buffer);
-//     clear_page_asm(attribute, segment_to_clear);
-// }
-
-// Only clears the one buffer that the user CANNOT see
 void clear_hidden_buffer(const unsigned char attribute) {
     const unsigned short hidden_segment = 0xB800 + (256 * !g_current_buffer);
     clear_page_asm(attribute, hidden_segment);
