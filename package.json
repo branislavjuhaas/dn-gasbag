@@ -1,0 +1,40 @@
+{
+  "name": "@dn-gasbag/core",
+  "version": "2.0.0",
+  "description": "Precision target elimination arcade",
+  "homepage": "https://github.com/branislavjuhaas/dn-gasbag#readme",
+  "bugs": {
+    "url": "https://github.com/branislavjuhaas/dn-gasbag/issues"
+  },
+  "license": "MIT",
+  "author": "Branislav Juhás <branislav@juhaas.dev>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/branislavjuhaas/dn-gasbag.git"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "vp pack",
+    "dev": "vp pack --watch",
+    "test": "vp test",
+    "check": "vp check",
+    "prepublishOnly": "vp run build"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "bumpp": "^11.1.0",
+    "typescript": "^7.0.2",
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.0.0",
+    "vite-plus": "^0.2.4"
+  },
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.0.0"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "bun",
+      "version": "1.4.2",
+      "onFail": "download"
+    }
+  }
+}
