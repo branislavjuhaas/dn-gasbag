@@ -159,11 +159,17 @@ export class Input {
   /** Handler keys are routed to while capturing, if any. */
   private handler: ((key: Key) => void) | null = null;
 
-  /** Resolver of the in-flight Kitty detection, if any. */
-  private detectDone: ((supported: boolean) => void) | null = null;
+  /** Receives the replies to the in-flight Kitty probe: `"kitty"` first (if supported), then `"da1"`. */
+  private detectEvent: ((e: "kitty" | "da1") => void) | null = null;
 
   /** `true` while stdin is in raw mode with the data listener attached. */
   private started = false;
+
+  /** Start of an escape sequence cut off at the end of a chunk, waiting for the rest. */
+  private pending = "";
+
+  /** Timer that gives up waiting and treats the cut-off bytes as a plain Escape key. */
+  private pendingTimer: ReturnType<typeof setTimeout> | undefined;
 
   /**
    * Puts stdin into raw mode and, unless disabled, negotiates the Kitty
@@ -208,6 +214,8 @@ export class Input {
    */
   stop() {
     if (!this.started) return;
+    clearTimeout(this.pendingTimer);
+    this.pending = "";
     this.started = false;
     if (this.kitty) {
       this.kitty = false;
@@ -289,25 +297,36 @@ export class Input {
    * query. Every terminal answers the second query, so a device-attributes
    * reply that arrives without a Kitty reply before it means no support.
    *
-   * @param timeoutMs - How long to wait for either reply before giving up.
+   * Detection always waits for the device-attributes reply, even when the Kitty
+   * reply came first. Resolving early would leave that reply unread, and it
+   * would be echoed into the shell once raw mode is left.
+   *
+   * @param timeoutMs - How long to wait for the replies before giving up.
    * @returns Whether the terminal reported Kitty support.
    */
   private detect(timeoutMs: number): Promise<boolean> {
     return new Promise((resolve) => {
-      const finish = (supported: boolean) => {
+      let supported = false;
+      const finish = () => {
         clearTimeout(timer);
-        this.detectDone = null;
+        this.detectEvent = null;
         resolve(supported);
       };
-      const timer = setTimeout(() => finish(false), timeoutMs);
-      this.detectDone = finish;
+      const timer = setTimeout(finish, timeoutMs);
+      this.detectEvent = (e) => {
+        if (e === "kitty") supported = true;
+        else finish(); // the device-attributes reply always comes last
+      };
       process.stdout.write("\x1b[?u\x1b[c");
     });
   }
 
-  /** stdin `data` listener; forwards raw chunks to {@link parse}. */
+  /** stdin `data` listener; prepends any cut-off sequence from the previous chunk, then parses. */
   private onData = (chunk: string | Buffer) => {
-    this.parse(String(chunk));
+    clearTimeout(this.pendingTimer);
+    const s = this.pending + String(chunk);
+    this.pending = "";
+    this.parse(s);
   };
 
   /**
@@ -342,6 +361,7 @@ export class Input {
       this.held.add(key.name); // press or repeat
       if (ev === "press") this.pressedNow.add(key.name);
     }
+    require("node:fs").appendFileSync("keys.log", JSON.stringify([key, ev]) + "\n");
   }
 
   /**
@@ -352,18 +372,21 @@ export class Input {
    * backspace, tab, space, control bytes and printable text.
    *
    * @param s - Raw chunk, decoded as UTF-8 text.
+   * @param flush - `true` when waiting for more bytes has timed out; incomplete
+   * sequences are then taken as they are instead of being buffered again.
    *
    * @remarks
    * Legacy mode carries no modifier information other than Ctrl: Alt+key
    * arrives as an `escape` key followed by the key itself.
    */
-  private parse(s: string) {
+  private parse(s: string, flush = false) {
     let i = 0;
     while (i < s.length) {
       const c = s.charAt(i);
 
       if (c === "\x1b") {
         const next = s.charAt(i + 1);
+        let incomplete = next === ""; // a lone ESC at the very end of the chunk
         if (next === "[" || next === "O") {
           let j = i + 2;
           while (j < s.length && s.charCodeAt(j) >= 0x20 && s.charCodeAt(j) <= 0x3f) j++;
@@ -373,6 +396,17 @@ export class Input {
             i = j + 1;
             continue;
           }
+          incomplete = true; // no final byte yet
+        }
+        if (incomplete && !flush) {
+          // the rest of the sequence may still be on its way; wait briefly, then give up
+          this.pending = s.slice(i);
+          this.pendingTimer = setTimeout(() => {
+            const rest = this.pending;
+            this.pending = "";
+            this.parse(rest, true);
+          }, 50);
+          return;
         }
         this.dispatch({ name: "escape" });
         i++;
@@ -432,8 +466,8 @@ export class Input {
     if (lead === "?") {
       // replies to our startup queries
       if (final === "u")
-        this.detectDone?.(true); // Kitty flags reply
-      else if (final === "c") this.detectDone?.(false); // device attributes reply, no Kitty before it
+        this.detectEvent?.("kitty"); // Kitty flags reply
+      else if (final === "c") this.detectEvent?.("da1"); // device attributes reply
       return;
     }
     if (lead === "<" || lead === "=" || lead === ">") return;

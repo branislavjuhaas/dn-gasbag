@@ -129,14 +129,16 @@ export class Screen {
   /** Styles as of the last {@link render}; the diff baseline. */
   private prevStyles!: Uint32Array;
 
+  /** Flag for storing the screen activation */
+  private active = false;
+
   /**
    * Creates a screen of `w * h` cells, all spaces in the default style.
-   *
-   * @param w - Width in columns.
-   * @param h - Height in rows.
    */
-  constructor(w: number, h: number) {
-    this.alloc(w, h);
+  constructor() {
+    const { columns: width, rows: height } = process.stdout;
+
+    this.alloc(width, height);
   }
 
   /**
@@ -285,5 +287,27 @@ export class Screen {
     if (curStyle !== 0) out += "\x1b[0m";
     // synchronized output: most modern terminals present the frame atomically, others ignore it
     return `\x1b[?2026h${out}\x1b[?2026l`;
+  }
+
+  /**
+   * Take over the terminal: alternate screen, hidden cursor, blank. The next
+   * render() redraws everything.
+   */
+  enter() {
+    if (this.active) return;
+    this.active = true;
+    this.prevChars.fill(0);
+    this.prevStyles.fill(0);
+    process.stdout.write(ENTER);
+  }
+
+  /**
+   * Give the terminal back as it was: reset style, show cursor, leave the
+   * alternate screen.
+   */
+  leave() {
+    if (!this.active) return;
+    this.active = false;
+    process.stdout.write(LEAVE);
   }
 }
