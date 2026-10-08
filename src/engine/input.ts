@@ -1,12 +1,52 @@
 import type { Screen } from "./screen";
 
+/**
+ * A single key event.
+ *
+ * `name` is the canonical, layout-independent key name, and `text` carries the
+ * printable character when the event produced one.
+ *
+ * @example
+ * ```ts
+ * if (key.name === "enter") submit();
+ * else if (key.text !== undefined) type(key.text);
+ * ```
+ */
 export interface Key {
+  /**
+   * Canonical key name.
+   *
+   * - Regular keys are lowercase: `"a"`, `"1"`, `"space"`.
+   * - Special keys use fixed names: `"up"`, `"down"`, `"left"`, `"right"`,
+   *   `"home"`, `"end"`, `"pageup"`, `"pagedown"`, `"delete"`, `"backspace"`,
+   *   `"enter"`, `"escape"`, `"tab"`.
+   * - Ctrl combinations are `"ctrl+" + letter`: `"ctrl+a"`, `"ctrl+c"`.
+   */
   name: string;
-  text?: string; // the typed character, for text input
+
+  /**
+   * The printable character the key produced, for text input.
+   *
+   * Present for letters, digits, punctuation, space and pasted text. Absent for
+   * non-printable keys and for Alt/Super combinations in Kitty mode, whose text
+   * is suppressed instead of guessed. Shift is reflected here (`"a"` vs `"A"`),
+   * not in {@link Key.name}.
+   */
+  text?: string;
 }
 
-type KeyEvent = "press" | "repeat" | "release" | "tap"; // 'tap' = legacy byte, no press/release info
+/**
+ * Event phase reported by the terminal.
+ *
+ * - `"press"` - the key went down (Kitty mode only).
+ * - `"repeat"` - the OS auto-repeat while the key is held (Kitty reports it;
+ *   legacy mode cannot distinguish it from a press).
+ * - `"release"` - the key went up (Kitty mode only).
+ * - `"tap"` - a legacy byte with no press/release information.
+ */
+type KeyEvent = "press" | "repeat" | "release" | "tap";
 
+/** Maps the final byte of a non-tilde CSI/SS3 sequence to a key name. */
 const CSI_FINAL: Record<string, string> = {
   A: "up",
   B: "down",
@@ -15,6 +55,8 @@ const CSI_FINAL: Record<string, string> = {
   H: "home",
   F: "end",
 };
+
+/** Maps the numeric parameter of a `CSI <n> ~` sequence to a key name. */
 const CSI_TILDE: Record<string, string> = {
   "1": "home",
   "3": "delete",
@@ -24,6 +66,8 @@ const CSI_TILDE: Record<string, string> = {
   "7": "home",
   "8": "end",
 };
+
+/** Kitty codepoints for named keys that have no usable character of their own. */
 const KITTY_NAMED: Record<number, string> = {
   27: "escape",
   13: "enter",
@@ -32,31 +76,112 @@ const KITTY_NAMED: Record<number, string> = {
   32: "space",
 };
 
+/** Kitty modifier bit for Shift. */
 const SHIFT = 1;
+/** Kitty modifier bit for Alt/Option. */
 const ALT = 2;
+/** Kitty modifier bit for Control. */
 const CTRL = 4;
+/** Kitty modifier bit for Super/Cmd/Windows. */
 const SUPER = 8;
 
-// Kitty progressive-enhancement flags: 1 disambiguate, 2 event types (press/repeat/release),
-// 8 report all keys as escape codes, 16 report associated text.
+/**
+ * Kitty progressive-enhancement flags pushed by {@link Input.start}:
+ * `1` disambiguate escape codes, `2` report event types (press/repeat/release),
+ * `8` report all keys as escape codes, `16` report associated text.
+ */
 const KITTY_FLAGS = 1 | 2 | 8 | 16;
 
+/**
+ * Terminal keyboard input with two operating modes.
+ *
+ * - **Kitty mode** (preferred): if the terminal supports the Kitty keyboard
+ *   protocol, {@link start} enables it and input becomes exact - presses,
+ *   repeats and releases arrive separately, so {@link isDown} mirrors the
+ *   physical keyboard.
+ * - **Legacy mode** (fallback): raw bytes only. There is no key-up information,
+ *   so {@link isDown} treats a key as held for {@link holdMs} milliseconds after
+ *   its last event, and OS auto-repeat is indistinguishable from a press.
+ *
+ * Keys are read once per frame; call {@link endFrame} at the end of each frame
+ * to clear the per-frame press state. To take the keyboard over (for example
+ * with {@link TextInput}), route events to a handler with {@link capture}.
+ *
+ * @example
+ * ```ts
+ * const input = new Input();
+ * await input.start(); // raw mode + Kitty detection
+ *
+ * const stop = startLoop((dt) => {
+ *   if (input.wasPressed("q")) stop();
+ *   if (input.isDown("right")) player.x += speed * dt;
+ *   input.endFrame(); // always the last input call of the frame
+ * });
+ *
+ * stop();
+ * input.stop();
+ * ```
+ *
+ * @remarks
+ * Raw mode disables the terminal's SIGINT handling, so Ctrl+C arrives as a key
+ * instead. {@link Input} handles it specially: it restores the terminal via
+ * {@link stop} and calls {@link onExit}, which exits the process with code 130
+ * by default.
+ */
 export class Input {
-  /** Legacy mode only: how long a key counts as "down" after its last event. */
+  /**
+   * Legacy mode only: how long (in milliseconds) a key still counts as held
+   * after its last event. Ignored in Kitty mode. Defaults to `150`.
+   */
   holdMs = 150;
-  /** True after start() if the Kitty keyboard protocol is active. */
+
+  /** `true` once {@link start} has detected and enabled the Kitty keyboard protocol. */
   kitty = false;
-  /** Called on Ctrl+C (raw mode disables the normal SIGINT). Triggers your 'exit' handlers. */
+
+  /**
+   * Called on Ctrl+C instead of the SIGINT that raw mode suppresses.
+   *
+   * The default exits the process with code 130 after {@link stop} has restored
+   * the terminal. Override it to run cleanup first, then call `process.exit`
+   * yourself.
+   */
   onExit: () => void = () => process.exit(130);
 
-  private lastSeen = new Map<string, number>(); // legacy: last event time per key
-  private held = new Set<string>(); // kitty: keys currently down
+  /** Legacy mode: timestamp of the most recent event, per key name. */
+  private lastSeen = new Map<string, number>();
+
+  /** Kitty mode: key names that are currently physically held. */
+  private held = new Set<string>();
+
+  /** Key names pressed since the last {@link endFrame}. */
   private pressedNow = new Set<string>();
+
+  /** Handler keys are routed to while capturing, if any. */
   private handler: ((key: Key) => void) | null = null;
+
+  /** Resolver of the in-flight Kitty detection, if any. */
   private detectDone: ((supported: boolean) => void) | null = null;
+
+  /** `true` while stdin is in raw mode with the data listener attached. */
   private started = false;
 
-  /** Enter raw mode and (optionally) detect + enable the Kitty protocol. Resolves to input.kitty. */
+  /**
+   * Puts stdin into raw mode and, unless disabled, negotiates the Kitty
+   * keyboard protocol.
+   *
+   * Detection queries the terminal's Kitty flags and then its primary device
+   * attributes; every terminal answers the second query, so a device-attributes
+   * reply that arrives without a Kitty reply before it means the protocol is
+   * unsupported. The exchange times out after 400 ms, leaving terminals that
+   * answer neither in legacy mode instead of hanging the game.
+   *
+   * Calling `start` on an already-started instance is a no-op that returns the
+   * current {@link kitty} state.
+   *
+   * @param useKitty - `false` to skip detection and always use legacy mode.
+   * @returns `true` if Kitty mode is active, otherwise `false` (legacy mode).
+   * @throws If `process.stdin` is not a TTY.
+   */
   async start(useKitty = true): Promise<boolean> {
     if (this.started) return this.kitty;
     if (!process.stdin.isTTY) throw new Error("stdin is not a TTY");
@@ -68,12 +193,19 @@ export class Input {
 
     if (useKitty && process.stdout.isTTY && (await this.detect(400))) {
       this.kitty = true;
-      // push flags, and turn on focus reporting so we can drop held keys when focus is lost
+      // push our flags, and enable focus reporting so held keys can be dropped when focus is lost
       process.stdout.write(`\x1b[>${KITTY_FLAGS}u\x1b[?1004h`);
     }
     return this.kitty;
   }
 
+  /**
+   * Restores the terminal: disables focus reporting, pops the Kitty flags,
+   * detaches the stdin listener, leaves raw mode and pauses stdin.
+   *
+   * Safe to call when not started, and safe to call more than once. Always call
+   * it before the process exits.
+   */
   stop() {
     if (!this.started) return;
     this.started = false;
@@ -86,7 +218,16 @@ export class Input {
     process.stdin.pause();
   }
 
-  /** True while the key is held. Exact with Kitty, emulated (seen within holdMs) otherwise. */
+  /**
+   * Whether the key is held down.
+   *
+   * Exact in Kitty mode (based on press/release events). Approximate in legacy
+   * mode: the key counts as held for {@link holdMs} milliseconds after its last
+   * press or repeat event.
+   *
+   * @param name - Canonical key name, e.g. `"right"` or `"space"`.
+   * @returns `true` while the key is down.
+   */
   isDown(name: string): boolean {
     if (this.kitty) return this.held.has(name);
     const t = this.lastSeen.get(name);
@@ -94,31 +235,63 @@ export class Input {
   }
 
   /**
-   * True if the key was pressed since the last endFrame().
-   * Kitty: real presses only. Legacy: also includes OS auto-repeat events.
+   * Whether the key was pressed since the last {@link endFrame}.
+   *
+   * Use it for one-shot actions (menu confirms, switching weapons, pause). In
+   * Kitty mode only real presses count; in legacy mode OS auto-repeats are
+   * indistinguishable from presses and also return `true`.
+   *
+   * @param name - Canonical key name, e.g. `"enter"` or `"q"`.
+   * @returns `true` if the key was pressed this frame.
    */
   wasPressed(name: string): boolean {
     return this.pressedNow.has(name);
   }
 
+  /**
+   * Clears the per-frame press state tracked for {@link wasPressed}.
+   *
+   * Call once per frame, after all {@link wasPressed} checks.
+   */
   endFrame() {
     this.pressedNow.clear();
   }
 
-  /** Route all keys to `handler` (e.g. a text box) instead of the game state. */
+  /**
+   * Routes all subsequent key events to `handler` instead of the game, which is
+   * how {@link TextInput} receives typing.
+   *
+   * While capturing, new presses do not update {@link isDown} or
+   * {@link wasPressed} (releases still update the held set), Ctrl+C still calls
+   * {@link onExit}, and the tracked state is cleared so stale presses don't leak
+   * into the text field.
+   *
+   * @param handler - Called for every key event while capturing.
+   */
   capture(handler: (key: Key) => void) {
     this.handler = handler;
     this.lastSeen.clear();
     this.pressedNow.clear();
   }
 
+  /**
+   * Stops routing keys to the handler passed to {@link capture}. Game input
+   * resumes on the next key event.
+   */
   release() {
     this.handler = null;
   }
 
-  // Ask for the current Kitty flags, then ask for primary device attributes. Every terminal
-  // answers the second query, so if its answer arrives without a Kitty reply before it, the
-  // protocol is unsupported. The timeout covers terminals that answer neither.
+  /**
+   * Probes the terminal for Kitty keyboard protocol support.
+   *
+   * Writes the "current flags" query followed by a primary device attributes
+   * query. Every terminal answers the second query, so a device-attributes
+   * reply that arrives without a Kitty reply before it means no support.
+   *
+   * @param timeoutMs - How long to wait for either reply before giving up.
+   * @returns Whether the terminal reported Kitty support.
+   */
   private detect(timeoutMs: number): Promise<boolean> {
     return new Promise((resolve) => {
       const finish = (supported: boolean) => {
@@ -132,10 +305,22 @@ export class Input {
     });
   }
 
+  /** stdin `data` listener; forwards raw chunks to {@link parse}. */
   private onData = (chunk: string | Buffer) => {
     this.parse(String(chunk));
   };
 
+  /**
+   * Applies one parsed key event.
+   *
+   * Releases only update the held set (they are tracked even while a text box
+   * has focus), Ctrl+C triggers the exit path, and the event is otherwise
+   * routed to the capture handler or recorded for {@link isDown} and
+   * {@link wasPressed}.
+   *
+   * @param key - The parsed key.
+   * @param ev - Event phase; defaults to `"tap"` for legacy bytes.
+   */
   private dispatch(key: Key, ev: KeyEvent = "tap") {
     if (ev === "release") {
       this.held.delete(key.name); // always track releases, even while a text box has focus
@@ -159,7 +344,19 @@ export class Input {
     }
   }
 
-  // One chunk can hold several keys (fast typing, paste, terminal replies), so parse in a loop.
+  /**
+   * Parses a raw chunk into key events.
+   *
+   * A chunk can contain several keys (fast typing, paste, terminal replies), so
+   * the string is consumed in a loop. Handles CSI/SS3 escape sequences, CR/LF,
+   * backspace, tab, space, control bytes and printable text.
+   *
+   * @param s - Raw chunk, decoded as UTF-8 text.
+   *
+   * @remarks
+   * Legacy mode carries no modifier information other than Ctrl: Alt+key
+   * arrives as an `escape` key followed by the key itself.
+   */
   private parse(s: string) {
     let i = 0;
     while (i < s.length) {
@@ -210,14 +407,26 @@ export class Input {
         continue;
       }
 
-      // plain printable text (typing, or a paste in Kitty mode) - no key-up will follow
+      // printable text (typing, or pasted text in Kitty mode): no key-up will follow
       const ch = String.fromCodePoint(s.codePointAt(i)!);
       this.dispatch({ name: ch.toLowerCase(), text: ch });
       i += ch.length;
     }
   }
 
-  // Handle one CSI (ESC [) or SS3 (ESC O) sequence.
+  /**
+   * Handles one escape sequence introduced by `ESC [` (CSI) or `ESC O` (SS3).
+   *
+   * Consumes replies to the startup queries and focus in/out reports, ignores
+   * private-prefixed sequences that are not modeled (`CSI <`, `CSI =`,
+   * `CSI >`), maps standard sequences through {@link CSI_FINAL} and
+   * {@link CSI_TILDE}, and sends Kitty `CSI ... u` sequences to
+   * {@link kittyKey}.
+   *
+   * @param isCsi - `true` for `ESC [`, `false` for `ESC O`.
+   * @param params - Bytes between the introducer and the final byte.
+   * @param final - Final byte identifying the sequence.
+   */
   private csi(isCsi: boolean, params: string, final: string) {
     const lead = params.charAt(0);
     if (lead === "?") {
@@ -256,6 +465,16 @@ export class Input {
     if (key) this.dispatch(key, ev);
   }
 
+  /**
+   * Decodes a Kitty `CSI code;mods[:event];text u` sequence into a key.
+   *
+   * @param code - Unicode code point of the key.
+   * @param mods - Modifier bitmask, already offset-corrected (0 means none).
+   * @param textParam - Kitty's optional colon-separated associated text (code
+   * points), empty when the terminal didn't send any.
+   * @returns The key, or `null` for modifier, media and keypad codes, which are
+   * ignored.
+   */
   private kittyKey(code: number, mods: number, textParam: string): Key | null {
     if (!(code > 0)) return null;
     if (code >= 57344 && code <= 63743) return null; // modifier, media and keypad keys: ignored
@@ -282,17 +501,57 @@ export class Input {
   }
 }
 
-/** Minimal single-line text box. Feed it keys, draw it each frame. */
+/**
+ * A minimal single-line text box.
+ *
+ * It owns no input state or terminal I/O: feed it every {@link Key} while it is
+ * captured, and draw it once per frame. Editing supports the usual keys:
+ * Backspace/Delete, Left/Right, Home/End.
+ *
+ * @example
+ * ```ts
+ * const name = new TextInput(12, (ch) => /[a-z0-9]/i.test(ch));
+ *
+ * input.capture((key) => {
+ *   const result = name.handle(key);
+ *   if (result === null) return;
+ *   input.release();
+ *   if (result === "submit") save(name.value);
+ * });
+ *
+ * // in the frame:
+ * name.draw(screen, 2, 5, style(15), style(0, 4));
+ * ```
+ */
 export class TextInput {
+  /** Current text. */
   value = "";
+
+  /** Cursor position as an index into {@link value}, `0`...`value.length`. */
   cursor = 0;
 
+  /**
+   * @param maxLength - Maximum length of {@link value} (`value.length`).
+   * Defaults to `16`.
+   * @param accept - Optional filter for typed characters; return `false` to
+   * reject a character. Defaults to accepting everything.
+   */
   constructor(
     public maxLength = 16,
     public accept: (ch: string) => boolean = () => true,
   ) {}
 
-  /** Returns 'submit' on Enter, 'cancel' on Escape, otherwise null. */
+  /**
+   * Applies one key event. Call it from the handler passed to
+   * {@link Input.capture}.
+   *
+   * Enter and Escape only report their intent; they don't clear the field, so
+   * the caller decides what happens (usually {@link Input.release} plus a state
+   * change). All other keys edit {@link value} and {@link cursor} in place.
+   *
+   * @param key - The key event to apply.
+   * @returns `"submit"` on Enter, `"cancel"` on Escape, otherwise `null`.
+   */
   handle(key: Key): "submit" | "cancel" | null {
     switch (key.name) {
       case "enter":
@@ -329,6 +588,19 @@ export class TextInput {
     return null;
   }
 
+  /**
+   * Draws the field and its cursor at `(x, y)` on the given screen.
+   *
+   * The value is padded with spaces to `maxLength + 1` cells so shrinking the
+   * text overwrites the previous frame, and the cursor cell is drawn over
+   * whatever character is under it (or a space at the end).
+   *
+   * @param screen - Anything with `set`/`text`, normally a {@link Screen}.
+   * @param x - Column of the first cell, 0-based.
+   * @param y - Row of the field, 0-based.
+   * @param textStyle - Packed style for the text and padding.
+   * @param cursorStyle - Packed style for the cursor cell.
+   */
   draw(
     screen: Pick<Screen, "set" | "text">,
     x: number,
@@ -336,7 +608,7 @@ export class TextInput {
     textStyle: number,
     cursorStyle: number,
   ) {
-    // padEnd gives the field a fixed width, so deleted characters get overwritten
+    // padEnd keeps the field at a fixed width, so deleted characters get overwritten
     screen.text(x, y, this.value.padEnd(this.maxLength + 1), textStyle);
     screen.set(x + this.cursor, y, this.value.charAt(this.cursor) || " ", cursorStyle);
   }
