@@ -1,3 +1,5 @@
+import { createSprite, type Sprite } from "./sprite";
+
 /**
  * Escape sequence that switches to the alternate screen buffer, hides the
  * cursor and clears the screen.
@@ -222,6 +224,43 @@ export class Screen {
   }
 
   /**
+   * Draws a sprite onto the screen buffer with its top-left corner at `(x, y)`.
+   *
+   * Transparent cells are skipped, and anything outside the screen is clipped, so
+   * the sprite can be partly or fully off-screen. Fractional positions are floored,
+   * which means you can keep entity positions as floats.
+   *
+   * Nothing is sent to the terminal until you call `screen.render()`.
+   *
+   * @param sprite - The sprite to draw.
+   * @param x - Column of the sprite's left edge (may be negative).
+   * @param y - Row of the sprite's top edge (may be negative).
+   * @param tint - Optional packed style that replaces the style of every visible
+   * cell, e.g. to flash a hit enemy white. `0` is a valid tint (default style).
+   */
+  drawSprite(sprite: Sprite, x: number, y: number, tint?: number): void {
+    const px = Math.floor(x);
+    const py = Math.floor(y);
+
+    // the visible part of the sprite, in sprite coordinates
+    const sx0 = Math.max(0, -px);
+    const sx1 = Math.min(sprite.w, this.w - px);
+    const sy0 = Math.max(0, -py);
+    const sy1 = Math.min(sprite.h, this.h - py);
+
+    for (let sy = sy0; sy < sy1; sy++) {
+      const src = sy * sprite.w;
+      const dst = (py + sy) * this.w + px;
+      for (let sx = sx0; sx < sx1; sx++) {
+        const ch = sprite.chars[src + sx];
+        if (ch === 0) continue;
+        this.chars[dst + sx] = ch;
+        this.styles[dst + sx] = tint ?? sprite.styles[src + sx];
+      }
+    }
+  }
+
+  /**
    * Diffs the current frame against the previous one and returns the minimal
    * ANSI sequence that updates the terminal.
    *
@@ -287,6 +326,47 @@ export class Screen {
     if (curStyle !== 0) out += "\x1b[0m";
     // synchronized output: most modern terminals present the frame atomically, others ignore it
     return `\x1b[?2026h${out}\x1b[?2026l`;
+  }
+
+  /**
+   * Copies a region of the screen buffer into a new sprite.
+   *
+   * This captures what has been drawn into the buffer so far, which is what the
+   * next `render()` will show. Parts of the region that lie outside the screen
+   * become transparent. Because the result is a copy, later drawing doesn't change it.
+   *
+   * Useful for saving the background before a dialog and restoring it afterwards,
+   * for transitions, and for dumping a frame while debugging.
+   *
+   * @param x - Column of the region's left edge. Defaults to `0`.
+   * @param y - Row of the region's top edge. Defaults to `0`.
+   * @param w - Region width. Defaults to the rest of the row.
+   * @param h - Region height. Defaults to the rest of the screen.
+   * @returns A new sprite with the region's characters and styles.
+   *
+   * @example
+   * ```ts
+   * const behind = captureScreen(screen, 10, 5, 30, 8); // before opening the dialog
+   * // ...draw and run the dialog...
+   * drawSprite(screen, behind, 10, 5); // restore
+   * ```
+   */
+  capture(x = 0, y = 0, w = this.w - x, h = this.h - y): Sprite {
+    const out = createSprite(Math.max(0, w), Math.max(0, h));
+
+    const sx0 = Math.max(0, -x);
+    const sx1 = Math.min(out.w, this.w - x);
+    if (sx0 >= sx1) return out;
+    const n = sx1 - sx0;
+
+    for (let sy = 0; sy < out.h; sy++) {
+      const row = y + sy;
+      if (row < 0 || row >= this.h) continue;
+      const from = row * this.w + x + sx0;
+      out.chars.set(this.chars.subarray(from, from + n), sy * out.w + sx0);
+      out.styles.set(this.styles.subarray(from, from + n), sy * out.w + sx0);
+    }
+    return out;
   }
 
   /**
