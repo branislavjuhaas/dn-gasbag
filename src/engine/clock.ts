@@ -107,6 +107,7 @@ export class Clock {
  */
 export function startLoop(frame: (dt: number) => void, fps = 60, maxDt = 0.1): () => void {
   const clock = new Clock(maxDt);
+  clock.tick();
   const interval = 1000 / fps;
   let next = performance.now();
   let timer: ReturnType<typeof setTimeout> | undefined;
