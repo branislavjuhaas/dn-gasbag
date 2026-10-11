@@ -1,5 +1,3 @@
-import type { Screen } from "./screen";
-
 /**
  * A rectangular block of styled characters, stored as two flat arrays in the
  * same format the {@link Screen} uses, so drawing one is a straight copy.
@@ -79,6 +77,14 @@ function toLines(art: string | string[]): string[] {
   return lines;
 }
 
+/** Splits a line into grapheme clusters so compound characters stay together. */
+function toCharacters(line: string): string[] {
+  return Array.from(
+    new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(line),
+    ({ segment }) => segment,
+  );
+}
+
 /**
  * Builds a sprite from ASCII art.
  *
@@ -109,8 +115,8 @@ function toLines(art: string | string[]): string[] {
  */
 export function spriteFromText(art: string | string[], opts: SpriteTextOptions = {}): Sprite {
   const { style = 0, palette = {}, transparent = " " } = opts;
-  const rows = toLines(art).map((line) => [...line]);
-  const colorRows = opts.colors ? toLines(opts.colors).map((line) => [...line]) : [];
+  const rows = toLines(art).map(toCharacters);
+  const colorRows = opts.colors ? toLines(opts.colors).map(toCharacters) : [];
 
   const h = rows.length;
   const w = Math.max(0, ...rows.map((row) => row.length));
