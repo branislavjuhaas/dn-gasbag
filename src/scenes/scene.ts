@@ -13,7 +13,7 @@ export abstract class Scene {
     this.screen = screen;
   }
 
-  abstract update(): Promise<{ successor: Scene | null }>;
+  abstract update(deltaTime: number): Promise<{ successor: Scene | null }>;
 
   abstract redraw(width: number, height: number): void;
 }
