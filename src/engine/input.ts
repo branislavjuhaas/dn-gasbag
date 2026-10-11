@@ -47,6 +47,7 @@ export interface Key {
 type KeyEvent = "press" | "repeat" | "release" | "tap";
 
 /** Maps the final byte of a non-tilde CSI/SS3 sequence to a key name. */
+/** Maps the final byte of a non-tilde CSI/SS3 sequence to a key name. */
 const CSI_FINAL: Record<string, string> = {
   A: "up",
   B: "down",
@@ -54,6 +55,24 @@ const CSI_FINAL: Record<string, string> = {
   D: "left",
   H: "home",
   F: "end",
+  // SS3 / Application Keypad sequences
+  k: "+",
+  m: "-",
+  j: "*",
+  o: "/",
+  M: "enter",
+  n: ".",
+  l: ",",
+  p: "0",
+  q: "1",
+  r: "2",
+  s: "3",
+  t: "4",
+  u: "5",
+  v: "6",
+  w: "7",
+  x: "8",
+  y: "9",
 };
 
 /** Maps the numeric parameter of a `CSI <n> ~` sequence to a key name. */
@@ -152,6 +171,9 @@ export class Input {
 
   /** Kitty mode: key names that are currently physically held. */
   private held = new Set<string>();
+
+  /** Kitty mode: maps physical key code point to the name registered on press. */
+  private heldCodes = new Map<number, string>();
 
   /** Key names pressed since the last {@link endFrame}. */
   private pressedNow = new Set<string>();
@@ -280,6 +302,7 @@ export class Input {
     this.handler = handler;
     this.lastSeen.clear();
     this.pressedNow.clear();
+    this.heldCodes.clear();
   }
 
   /**
@@ -330,19 +353,31 @@ export class Input {
   };
 
   /**
-   * Applies one parsed key event.
+   * Processes a single parsed key event and updates internal input state.
    *
-   * Releases only update the held set (they are tracked even while a text box
-   * has focus), Ctrl+C triggers the exit path, and the event is otherwise
-   * routed to the capture handler or recorded for {@link isDown} and
-   * {@link wasPressed}.
+   * Handling behavior:
+   * - **Releases (`"release"`):** Removes the key from {@link held} and cleans up
+   *   code-to-name tracking in {@link heldCodes} to ensure shifted keys match on release.
+   * - **Interpreted Ctrl+C:** Immediately halts input listening via {@link stop} and
+   *   invokes {@link onExit}.
+   * - **Captured Mode:** Routes the key event directly to the active {@link handler} function.
+   * - **Normal Mode:** Updates physical held state (in Kitty mode) or timestamp tracking
+   *   (in legacy mode), and registers the press into {@link pressedNow} for the current frame.
    *
-   * @param key - The parsed key.
-   * @param ev - Event phase; defaults to `"tap"` for legacy bytes.
+   * @param key - The parsed key payload containing the canonical name and printable text.
+   * @param ev - The event phase reported by the terminal protocol. Defaults to `"tap"` for legacy bytes.
+   * @param code - Optional physical key codepoint (Unicode/Kitty) used to reliably match key releases when modifier states change while held.
    */
-  private dispatch(key: Key, ev: KeyEvent = "tap") {
+  private dispatch(key: Key, ev: KeyEvent = "tap", code?: number) {
     if (ev === "release") {
-      this.held.delete(key.name); // always track releases, even while a text box has focus
+      if (code !== undefined) {
+        const pressedName = this.heldCodes.get(code);
+        if (pressedName) {
+          this.held.delete(pressedName);
+          this.heldCodes.delete(code);
+        }
+      }
+      this.held.delete(key.name);
       return;
     }
     if (key.name === "ctrl+c") {
@@ -358,7 +393,10 @@ export class Input {
       this.lastSeen.set(key.name, performance.now());
       this.pressedNow.add(key.name);
     } else {
-      this.held.add(key.name); // press or repeat
+      this.held.add(key.name);
+      if (code !== undefined) {
+        this.heldCodes.set(code, key.name); // Track which key name was bound to this keycode on press
+      }
       if (ev === "press") this.pressedNow.add(key.name);
     }
     require("node:fs").appendFileSync("keys.log", JSON.stringify([key, ev]) + "\n");
@@ -464,10 +502,8 @@ export class Input {
   private csi(isCsi: boolean, params: string, final: string) {
     const lead = params.charAt(0);
     if (lead === "?") {
-      // replies to our startup queries
-      if (final === "u")
-        this.detectEvent?.("kitty"); // Kitty flags reply
-      else if (final === "c") this.detectEvent?.("da1"); // device attributes reply
+      if (final === "u") this.detectEvent?.("kitty");
+      else if (final === "c") this.detectEvent?.("da1");
       return;
     }
     if (lead === "<" || lead === "=" || lead === ">") return;
@@ -475,7 +511,8 @@ export class Input {
     if (isCsi && params === "" && (final === "O" || final === "I")) {
       // focus out / in
       if (final === "O") {
-        this.held.clear(); // a key-up may have been missed while unfocused
+        this.held.clear();
+        this.heldCodes.clear(); // <--- ADD THIS LINE
         this.lastSeen.clear();
       }
       return;
@@ -483,7 +520,7 @@ export class Input {
 
     // params look like "code[:alts] ; mods[:event] ; text"
     const [p0 = "", p1 = "", p2 = ""] = params.split(";");
-    const code = parseInt(p0, 10); // stops at ':' so "97:65" gives 97
+    const code = parseInt(p0, 10);
     const [modStr = "", evStr = ""] = p1.split(":");
     const mods = modStr ? parseInt(modStr, 10) - 1 : 0;
     const ev: KeyEvent =
@@ -496,7 +533,8 @@ export class Input {
       const name = final === "~" ? CSI_TILDE[String(code)] : CSI_FINAL[final];
       if (name) key = { name };
     }
-    if (key) this.dispatch(key, ev);
+
+    if (key) this.dispatch(key, ev, code); // <--- UPDATE THIS LINE (pass 'code')
   }
 
   /**
@@ -511,16 +549,48 @@ export class Input {
    */
   private kittyKey(code: number, mods: number, textParam: string): Key | null {
     if (!(code > 0)) return null;
-    if (code >= 57344 && code <= 63743) return null; // modifier, media and keypad keys: ignored
+
+    // Keypad Private Use Area mapping
+    const KEYPAD_MAP: Record<number, string> = {
+      57399: "0",
+      57400: "1",
+      57401: "2",
+      57402: "3",
+      57403: "4",
+      57404: "5",
+      57405: "6",
+      57406: "7",
+      57407: "8",
+      57408: "9",
+      57409: ".",
+      57410: "/",
+      57411: "*",
+      57412: "-",
+      57413: "+",
+      57414: "enter",
+      57415: "=",
+    };
+
+    if (KEYPAD_MAP[code]) {
+      const name = KEYPAD_MAP[code];
+      return { name, text: name.length === 1 ? name : undefined };
+    }
+
+    // Ignore remaining modifier/media PUA keys
+    if (code >= 57344 && code <= 63743) return null;
 
     const named = KITTY_NAMED[code];
     const ch = String.fromCodePoint(code);
-    const name = named ?? ch.toLowerCase();
+    const baseName = named ?? ch.toLowerCase();
 
-    if (mods & CTRL && named === undefined) return { name: `ctrl+${name}` };
-
-    const printable = named === undefined || code === 32;
-    if (!printable) return { name };
+    // Assemble modifier prefix chain
+    const modParts: string[] = [];
+    if (mods & CTRL) modParts.push("ctrl");
+    if (mods & ALT) modParts.push("alt");
+    // Include 'shift' in key name if Ctrl/Alt are also held OR if it's a special named key (e.g. shift+enter)
+    if (mods & SHIFT && (mods & (CTRL | ALT) || named !== undefined)) {
+      modParts.push("shift");
+    }
 
     let text: string | undefined;
     if (textParam) {
@@ -531,7 +601,18 @@ export class Input {
     } else if (!(mods & (ALT | SUPER))) {
       text = mods & SHIFT ? ch.toUpperCase() : ch;
     }
-    return text === undefined ? { name } : { name, text };
+
+    // Construct canonical key name (e.g. "ctrl+shift+a", "ctrl+a", "a")
+    let name = modParts.length > 0 ? `${modParts.join("+")}+${baseName}` : baseName;
+
+    // Fallback for Shift + '=' (code 61) without Ctrl/Alt when textParam is omitted
+    if (code === 61 && mods === SHIFT) {
+      name = "+";
+      text = "+";
+    }
+
+    const printable = named === undefined || code === 32;
+    return printable ? { name, text } : { name };
   }
 }
 
