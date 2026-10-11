@@ -16,13 +16,12 @@ export class DemoScene extends Scene {
     process.stdout.write(this.screen.render());
   }
 
-  async update(): Promise<{ successor: Scene | null }> {
-    this.screen.set(
-      Math.floor(Math.random() * this.screen.w),
-      Math.floor(Math.random() * this.screen.h),
-      "#",
-      style(Math.floor(Math.random() * 15)),
-    );
+  async update(_deltaTime: number): Promise<{ successor: Scene | null }> {
+    for (let y = 0; y < this.screen.h; y++) {
+      for (let x = 0; x < this.screen.w; x++) {
+        this.screen.set(x, y, "#", style(Math.floor(Math.random() * 15)));
+      }
+    }
 
     process.stdout.write(this.screen.render());
 
