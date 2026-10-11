@@ -4,24 +4,67 @@ import { style, type Screen } from "../engine/screen";
 import { Scene } from "./scene";
 
 export class DemoScene extends Scene {
+  changesPerFrame: number = 0.1;
+
   constructor(clock: Clock, input: Input, screen: Screen) {
     super(clock, input, screen);
 
-    for (let y = 0; y < screen.h; y++) {
+    for (let y = 0; y < screen.h - 1; y++) {
       for (let x = 0; x < screen.w; x++) {
         this.screen.set(x, y, "#", style(Math.floor(Math.random() * 15)));
       }
     }
 
+    this.statusBar();
+
     process.stdout.write(this.screen.render());
   }
 
-  async update(_deltaTime: number): Promise<{ successor: Scene | null }> {
-    for (let y = 0; y < this.screen.h; y++) {
+  statusBar(): void {
+    this.screen.text(
+      0,
+      this.screen.h - 1,
+      " dn gasbag v2 - demo | 60 fps" +
+        " ".repeat(this.screen.w - 40) +
+        `${Math.floor(this.changesPerFrame * 100)
+          .toString()
+          .padStart(3)}% (+/-) `,
+      style(15, 5),
+    );
+  }
+
+  changeSpeed(factor: number): void {
+    this.changesPerFrame = Math.min(Math.max(this.changesPerFrame + factor * 0.05, 0), 1);
+
+    this.screen.text(
+      this.screen.w - 11,
+      this.screen.h - 1,
+      Math.floor(this.changesPerFrame * 100)
+        .toString()
+        .padStart(3),
+      style(15, 5),
+    );
+  }
+
+  async update(deltaTime: number): Promise<{ successor: Scene | null }> {
+    if (this.input.isDown("+")) this.changeSpeed(deltaTime);
+    if (this.input.isDown("-")) this.changeSpeed(-deltaTime);
+
+    for (let y = 0; y < this.screen.h - 1; y++) {
       for (let x = 0; x < this.screen.w; x++) {
+        if (Math.random() > this.changesPerFrame) continue;
         this.screen.set(x, y, "#", style(Math.floor(Math.random() * 15)));
       }
     }
+
+    this.screen.text(
+      22,
+      this.screen.h - 1,
+      Math.floor(1 / deltaTime)
+        .toString()
+        .padStart(3) + " fps    ",
+      style(15, 5),
+    );
 
     process.stdout.write(this.screen.render());
 
@@ -32,7 +75,7 @@ export class DemoScene extends Scene {
     const current = this.screen.capture();
 
     const ow = this.screen.w;
-    const oh = this.screen.h;
+    const oh = this.screen.h - 1;
 
     this.screen.resize(w, h);
 
@@ -45,12 +88,14 @@ export class DemoScene extends Scene {
       }
     }
 
-    for (let y = oh; y < h; y++) {
+    for (let y = oh; y < h - 1; y++) {
       for (let x = 0; x < w; x++) {
         const c = Math.floor(Math.random() * 15);
         this.screen.set(x, y, "#", style(c));
       }
     }
+
+    this.statusBar();
 
     process.stdout.write(this.screen.render());
   }
