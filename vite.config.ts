@@ -11,7 +11,7 @@ export default defineConfig({
     dts: {
       generator: "tsgo",
     },
-    exports: true,
+    format: ["esm"],
   },
   lint: {
     options: {
