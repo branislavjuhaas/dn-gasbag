@@ -70,4 +70,7 @@ async function main() {
   }, 60);
 }
 
+// void (async () => {
+//   await main();
+// })();
 await main();
