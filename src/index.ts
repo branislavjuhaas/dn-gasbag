@@ -2,7 +2,9 @@ import { Clock, startLoop } from "./engine/clock";
 import { Input } from "./engine/input";
 import { Screen } from "./engine/screen";
 import type { Scene } from "./scenes/scene";
+import { MenuScene } from "./scenes/menu";
 import { DemoScene } from "./scenes/demo";
+import { setTitle } from "./engine/system";
 
 async function main() {
   if (!process.stdout.isTTY) {
@@ -11,6 +13,8 @@ async function main() {
     );
   }
 
+  setTitle("DN Gasbag");
+
   const screen = new Screen();
   const input = new Input();
   const clock = new Clock();
@@ -18,7 +22,13 @@ async function main() {
   screen.enter();
   await input.start();
 
-  let activeScene: Scene = new DemoScene(clock, input, screen);
+  let activeScene: Scene;
+
+  if (process.argv.includes("demo")) {
+    activeScene = new DemoScene(clock, input, screen);
+  } else {
+    activeScene = new MenuScene(clock, input, screen);
+  }
 
   let isExiting = false;
   let stopLoop = () => {};
@@ -70,7 +80,7 @@ async function main() {
   }, 60);
 }
 
-// void (async () => {
-//   await main();
-// })();
-await main();
+void (async () => {
+  await main();
+})();
+// await main();
