@@ -550,7 +550,7 @@ export class Input {
   private kittyKey(code: number, mods: number, textParam: string): Key | null {
     if (!(code > 0)) return null;
 
-    // Keypad Private Use Area mapping
+    // Keypad Private Use Area mapping (57399 - 57415)
     const KEYPAD_MAP: Record<number, string> = {
       57399: "0",
       57400: "1",
@@ -572,8 +572,9 @@ export class Input {
     };
 
     if (KEYPAD_MAP[code]) {
-      const name = KEYPAD_MAP[code];
-      return { name, text: name.length === 1 ? name : undefined };
+      let name = KEYPAD_MAP[code];
+      if (mods & CTRL) name = `ctrl+${name}`;
+      return { name, text: !(mods & CTRL) && name.length === 1 ? name : undefined };
     }
 
     // Ignore remaining modifier/media PUA keys
@@ -581,17 +582,8 @@ export class Input {
 
     const named = KITTY_NAMED[code];
     const ch = String.fromCodePoint(code);
-    const baseName = named ?? ch.toLowerCase();
 
-    // Assemble modifier prefix chain
-    const modParts: string[] = [];
-    if (mods & CTRL) modParts.push("ctrl");
-    if (mods & ALT) modParts.push("alt");
-    // Include 'shift' in key name if Ctrl/Alt are also held OR if it's a special named key (e.g. shift+enter)
-    if (mods & SHIFT && (mods & (CTRL | ALT) || named !== undefined)) {
-      modParts.push("shift");
-    }
-
+    // Decode associated text sent by Kitty protocol
     let text: string | undefined;
     if (textParam) {
       text = textParam
@@ -602,14 +594,28 @@ export class Input {
       text = mods & SHIFT ? ch.toUpperCase() : ch;
     }
 
-    // Construct canonical key name (e.g. "ctrl+shift+a", "ctrl+a", "a")
-    let name = modParts.length > 0 ? `${modParts.join("+")}+${baseName}` : baseName;
-
-    // Fallback for Shift + '=' (code 61) without Ctrl/Alt when textParam is omitted
-    if (code === 61 && mods === SHIFT) {
-      name = "+";
+    // Fallback override for Shift + '=' (code 61) when textParam is omitted by terminal
+    if (code === 61 && mods & SHIFT) {
       text = "+";
     }
+
+    // Base key name: if text produced a symbol (e.g. '+' from Shift+=), use it as baseName
+    let baseName = named ?? ch.toLowerCase();
+    if (text && text.length === 1 && !/[a-zA-Z0-9]/.test(text) && named === undefined) {
+      baseName = text;
+    }
+
+    // Assemble modifier prefix chain
+    const modParts: string[] = [];
+    if (mods & CTRL) modParts.push("ctrl");
+    if (mods & ALT) modParts.push("alt");
+    // Include 'shift' only if Ctrl/Alt are held OR for special named keys (e.g. shift+enter)
+    if (mods & SHIFT && (mods & (CTRL | ALT) || named !== undefined)) {
+      modParts.push("shift");
+    }
+
+    // Construct canonical key name (e.g. "ctrl+shift+a", "ctrl+a", "+", "a")
+    const name = modParts.length > 0 ? `${modParts.join("+")}+${baseName}` : baseName;
 
     const printable = named === undefined || code === 32;
     return printable ? { name, text } : { name };
