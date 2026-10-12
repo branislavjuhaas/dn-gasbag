@@ -1,6 +1,7 @@
 import type { Clock } from "../engine/clock";
 import type { Input } from "../engine/input";
 import { style, type Screen } from "../engine/screen";
+import { setTitle } from "../engine/system";
 import { Scene } from "./scene";
 
 export class DemoScene extends Scene {
@@ -8,6 +9,8 @@ export class DemoScene extends Scene {
 
   constructor(clock: Clock, input: Input, screen: Screen) {
     super(clock, input, screen);
+
+    setTitle("DN Gasbag - diff_rend Demo");
 
     for (let y = 0; y < screen.h - 1; y++) {
       for (let x = 0; x < screen.w; x++) {
@@ -24,8 +27,8 @@ export class DemoScene extends Scene {
     this.screen.text(
       0,
       this.screen.h - 1,
-      " dn gasbag v2 - demo | 60 fps" +
-        " ".repeat(this.screen.w - 40) +
+      " DN Gasbag v2 - diff_rend Demo | 60 FPS" +
+        " ".repeat(this.screen.w - 50) +
         `${Math.floor(this.changesPerFrame * 100)
           .toString()
           .padStart(3)}% (+/-) `,
@@ -58,11 +61,11 @@ export class DemoScene extends Scene {
     }
 
     this.screen.text(
-      22,
+      32,
       this.screen.h - 1,
       Math.floor(1 / deltaTime)
         .toString()
-        .padStart(3) + " fps    ",
+        .padStart(3) + " FPS    ",
       style(15, 5),
     );
 
